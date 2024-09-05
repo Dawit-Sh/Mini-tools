@@ -3,7 +3,7 @@ import tarfile
 import time
 import hashlib
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, messagebox
 import threading
 import datetime
 
@@ -11,8 +11,8 @@ class CoRrUptEdFile:
     def __init__(self, master):
         self.master = master
         master.title("CoRrUptEd File")
-        master.geometry("500x400")
-        master.configure(bg="#1e1e1e")
+        master.geometry("500x500")
+        master.configure(bg="#2c2c2c")
 
         self.backup_thread = None
         self.paused = False
@@ -30,13 +30,14 @@ class CoRrUptEdFile:
     def setup_custom_style(self):
         style = ttk.Style()
         style.theme_create("darktheme", parent="alt", settings={
-            "TFrame": {"configure": {"background": "#1e1e1e"}},
+            "TFrame": {"configure": {"background": "#2c2c2c"}},
             "TButton": {
-                "configure": {"font": ("Arial", 10), "background": "#3700B3", "foreground": "white"},
-                "map": {"background": [("active", "#6200EE")], "foreground": [("active", "white")]}
+                "configure": {"font": ("Arial", 10), "background": "#4a4a4a", "foreground": "white"},
+                "map": {"background": [("active", "#5a5a5a")], "foreground": [("active", "white")]}
             },
-            "TLabel": {"configure": {"font": ("Arial", 10), "background": "#1e1e1e", "foreground": "white"}},
-            "TEntry": {"configure": {"font": ("Arial", 10), "fieldbackground": "#2e2e2e", "foreground": "white"}},
+            "TLabel": {"configure": {"font": ("Arial", 10), "background": "#2c2c2c", "foreground": "white"}},
+            "TEntry": {"configure": {"font": ("Arial", 10), "fieldbackground": "#3c3c3c", "foreground": "white"}},
+            "Horizontal.TProgressbar": {"configure": {"background": "#4CAF50"}},
         })
         style.theme_use("darktheme")
 
@@ -66,12 +67,18 @@ class CoRrUptEdFile:
         self.stop_button = ttk.Button(button_frame, text="Stop Backup", command=self.stop_backup, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
 
+        self.restore_button = ttk.Button(button_frame, text="Restore Backup", command=self.restore_backup)
+        self.restore_button.pack(side=tk.LEFT, padx=5)
+
         ttk.Label(frame, text="Status:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         self.status_label = ttk.Label(frame, textvariable=self.status)
         self.status_label.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-        self.log = tk.Text(frame, height=10, width=55, bg="#2e2e2e", fg="white", font=("Arial", 10))
-        self.log.grid(row=4, column=0, columnspan=3, padx=5, pady=5)
+        self.progress_bar = ttk.Progressbar(frame, orient="horizontal", length=300, mode="determinate")
+        self.progress_bar.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="we")
+
+        self.log = tk.Text(frame, height=10, width=55, bg="#3c3c3c", fg="white", font=("Arial", 10))
+        self.log.grid(row=5, column=0, columnspan=3, padx=5, pady=5)
 
     def browse_source_directory(self):
         directory = filedialog.askdirectory()
@@ -116,6 +123,7 @@ class CoRrUptEdFile:
         self.start_button.config(state=tk.NORMAL)
         self.pause_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.DISABLED)
+        self.progress_bar["value"] = 0
 
     def backup_loop(self):
         while self.running:
@@ -132,8 +140,23 @@ class CoRrUptEdFile:
             snapshot_name = f"{source_dir_name}_{timestamp}.tar.gz"
             snapshot_path = os.path.join(backup_dir, snapshot_name)
             
+            total_files = sum([len(files) for r, d, files in os.walk(source_dir)])
+            self.progress_bar["maximum"] = total_files
+            self.progress_bar["value"] = 0
+            
             with tarfile.open(snapshot_path, "w:gz") as tar:
-                tar.add(source_dir, arcname=source_dir_name)
+                for root, dirs, files in os.walk(source_dir):
+                    for file in files:
+                        if self.paused:
+                            while self.paused and self.running:
+                                time.sleep(0.1)
+                        if not self.running:
+                            return
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, source_dir)
+                        tar.add(file_path, arcname=arcname)
+                        self.progress_bar["value"] += 1
+                        self.master.update_idletasks()
 
             # Check for duplicates
             if self.is_duplicate(snapshot_path):
@@ -144,6 +167,8 @@ class CoRrUptEdFile:
 
         except Exception as e:
             self.log_message(f"Error creating snapshot: {str(e)}")
+        finally:
+            self.progress_bar["value"] = 0
 
     def is_duplicate(self, new_snapshot):
         backup_dir = self.backup_directory.get()
@@ -164,6 +189,57 @@ class CoRrUptEdFile:
     def log_message(self, message):
         self.log.insert(tk.END, f"{datetime.datetime.now()}: {message}\n")
         self.log.see(tk.END)
+
+    def restore_backup(self):
+        backup_file = filedialog.askopenfilename(
+            initialdir=self.backup_directory.get(),
+            title="Select backup file to restore",
+            filetypes=[("Tar GZ files", "*.tar.gz")]
+        )
+        if not backup_file:
+            return
+
+        restore_dir = filedialog.askdirectory(
+            title="Select directory to restore backup",
+            initialdir=self.source_directory.get()
+        )
+        if not restore_dir:
+            return
+
+        warning_message = f"Warning: Restoring the backup will overwrite files in the restore directory.\n\nRestore Directory: {restore_dir}\n\nAre you sure you want to proceed?"
+        if messagebox.askyesno("Confirm Restore", warning_message):
+            self.running = True
+            self.paused = False
+            self.status.set("Restoring")
+            self.status_label.config(foreground="#4CAF50")
+            self.start_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.NORMAL)
+            
+            restore_thread = threading.Thread(target=self.perform_restore, args=(backup_file, restore_dir), daemon=True)
+            restore_thread.start()
+
+    def perform_restore(self, backup_file, restore_dir):
+        try:
+            with tarfile.open(backup_file, "r:gz") as tar:
+                members = tar.getmembers()
+                self.progress_bar["maximum"] = len(members)
+                self.progress_bar["value"] = 0
+                for member in members:
+                    if self.paused:
+                        while self.paused and self.running:
+                            time.sleep(0.1)
+                    if not self.running:
+                        return
+                    tar.extract(member, path=restore_dir)
+                    self.progress_bar["value"] += 1
+                    self.master.update_idletasks()
+            self.log_message(f"Backup restored to: {restore_dir}")
+        except Exception as e:
+            self.log_message(f"Error restoring backup: {str(e)}")
+        finally:
+            self.progress_bar["value"] = 0
+            self.stop_backup()  # Reset the UI state
 
 if __name__ == "__main__":
     root = tk.Tk()
