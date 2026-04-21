@@ -1,0 +1,1 @@
+# No third-party dependencies — uses stdlib only (tkinter, re, os, datetime)

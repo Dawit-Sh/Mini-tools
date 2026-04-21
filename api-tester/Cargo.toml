@@ -1,0 +1,17 @@
+[package]
+name = "mini-req"
+version = "0.1.0"
+edition = "2021"
+description = "Fast terminal HTTP client for API testing"
+
+[[bin]]
+name = "mini-req"
+
+[dependencies]
+reqwest    = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
+serde      = { version = "1",    features = ["derive"] }
+serde_json = "1"
+clap       = { version = "4",    features = ["derive"] }
+colored    = "2"
+dirs       = "5"
+base64     = "0.22"

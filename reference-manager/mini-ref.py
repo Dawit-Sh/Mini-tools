@@ -1,157 +1,335 @@
 import tkinter as tk
-from tkinter import ttk
-from tkinter import messagebox
-from tkinter import filedialog
+from tkinter import ttk, messagebox, filedialog
 import json
+import re
+import webbrowser
+
+DARK = "#2E2E2E"
+DARKER = "#3E3E3E"
+GREEN = "#4CAF50"
+GREEN_HOV = "#45A049"
+
 
 class Reference:
-    def __init__(self, title, author, year, link=None):
+    def __init__(self, title, author, year, link="", tags="", notes=""):
         self.title = title
         self.author = author
-        self.year = year
+        self.year = str(year)
         self.link = link
+        self.tags = tags
+        self.notes = notes
+
+    def to_dict(self):
+        return {k: v for k, v in self.__dict__.items()}
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(**{k: d.get(k, "") for k in ("title", "author", "year", "link", "tags", "notes")})
+
+    def display(self):
+        base = f"{self.author} ({self.year}). {self.title}."
+        if self.link:
+            base += f"  [{self.link}]"
+        if self.tags:
+            base += f"  #{self.tags}"
+        return base
+
+    def apa(self):
+        return f"{self.author} ({self.year}). {self.title}." + (f" Retrieved from {self.link}" if self.link else "")
+
+    def bibtex(self):
+        key = re.sub(r"\W", "", self.author.split()[0] if self.author else "ref") + self.year
+        return (f"@article{{{key},\n"
+                f"  author = {{{self.author}}},\n"
+                f"  title  = {{{self.title}}},\n"
+                f"  year   = {{{self.year}}},\n"
+                + (f"  url    = {{{self.link}}},\n" if self.link else "") +
+                f"}}")
+
+
+class _RefDialog(tk.Toplevel):
+    def __init__(self, parent, title="Reference", ref: Reference = None):
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.grab_set()
+        self.configure(bg=DARK)
+        self.result = None
+
+        fields = [
+            ("Title *",   "title",  False),
+            ("Author *",  "author", False),
+            ("Year *",    "year",   False),
+            ("Link",      "link",   False),
+            ("Tags",      "tags",   False),
+        ]
+        self._vars = {}
+        for i, (label, key, _secret) in enumerate(fields):
+            ttk.Label(self, text=label, background=DARK, foreground="#FFFFFF").grid(
+                row=i, column=0, padx=14, pady=5, sticky="w")
+            v = tk.StringVar(value=getattr(ref, key, "") if ref else "")
+            self._vars[key] = v
+            e = ttk.Entry(self, textvariable=v, width=42)
+            e.grid(row=i, column=1, padx=14, pady=5, sticky="ew")
+            if i == 0:
+                e.focus_set()
+
+        # Notes (multiline)
+        ttk.Label(self, text="Notes", background=DARK, foreground="#FFFFFF").grid(
+            row=len(fields), column=0, padx=14, pady=5, sticky="nw")
+        self._notes = tk.Text(self, height=4, width=42, bg=DARKER, fg="#FFFFFF",
+                              insertbackground="white", font=("Arial", 10))
+        self._notes.grid(row=len(fields), column=1, padx=14, pady=5, sticky="ew")
+        if ref and ref.notes:
+            self._notes.insert("1.0", ref.notes)
+
+        bf = ttk.Frame(self)
+        bf.grid(row=len(fields) + 1, column=0, columnspan=2, pady=10)
+        ttk.Button(bf, text="Save", command=self._ok, width=10).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="Cancel", command=self.destroy, width=10).pack(side=tk.LEFT, padx=6)
+
+        self.wait_window()
+
+    def _ok(self):
+        title = self._vars["title"].get().strip()
+        author = self._vars["author"].get().strip()
+        year = self._vars["year"].get().strip()
+        if not title or not author or not year:
+            messagebox.showwarning("Incomplete", "Title, Author and Year are required.", parent=self)
+            return
+        if not re.fullmatch(r"\d{1,4}", year):
+            messagebox.showwarning("Invalid Year", "Year must be a number.", parent=self)
+            return
+        self.result = Reference(
+            title=title,
+            author=author,
+            year=year,
+            link=self._vars["link"].get().strip(),
+            tags=self._vars["tags"].get().strip(),
+            notes=self._notes.get("1.0", tk.END).strip(),
+        )
+        self.destroy()
+
 
 class ReferenceManagerApp:
     def __init__(self, master):
         self.master = master
         master.title("Reference Manager")
-        master.geometry("600x500")
-        master.configure(bg="#2E2E2E")
+        master.geometry("800x560")
+        master.configure(bg=DARK)
+        master.resizable(True, True)
 
-        self.references = []
+        self.references: list[Reference] = []
+        self._sort_col = "author"
+        self._sort_rev = False
 
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        self.style.configure('.', background='#2E2E2E', foreground='#FFFFFF')
-        self.style.configure('TLabel', background='#2E2E2E', foreground='#FFFFFF')
-        self.style.configure('TEntry', fieldbackground='#3E3E3E', foreground='#FFFFFF')
-        self.style.configure('TButton', background='#4CAF50', foreground='#FFFFFF')
-        self.style.map('TButton', background=[('active', '#45A049')])
+        self._setup_style()
+        self._build_ui()
 
-        self.frame = ttk.Frame(master, padding="20")
-        self.frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        master.grid_columnconfigure(0, weight=1)
-        master.grid_rowconfigure(0, weight=1)
+    def _setup_style(self):
+        s = ttk.Style()
+        s.theme_use("clam")
+        s.configure(".", background=DARK, foreground="#FFFFFF")
+        s.configure("TLabel", background=DARK, foreground="#FFFFFF")
+        s.configure("TEntry", fieldbackground=DARKER, foreground="#FFFFFF")
+        s.configure("TButton", background=GREEN, foreground="#FFFFFF")
+        s.map("TButton", background=[("active", GREEN_HOV)])
+        s.configure("Treeview", background=DARKER, foreground="#FFFFFF",
+                    fieldbackground=DARKER, rowheight=24)
+        s.map("Treeview", background=[("selected", GREEN)])
+        s.configure("Treeview.Heading", background="#4a4a4a", foreground="#FFFFFF")
 
-        self.title_label = ttk.Label(self.frame, text="Title:")
-        self.title_label.grid(row=0, column=0, padx=5, pady=5, sticky="e")
-        self.title_entry = ttk.Entry(self.frame, width=40)
-        self.title_entry.grid(row=0, column=1, padx=5, pady=5, sticky="we")
-        self.title_entry.bind('<Return>', lambda event: self.focus_next_entry(event, self.author_entry))
+    def _build_ui(self):
+        frame = ttk.Frame(self.master, padding="12")
+        frame.grid(row=0, column=0, sticky="nsew")
+        self.master.columnconfigure(0, weight=1)
+        self.master.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
 
-        self.author_label = ttk.Label(self.frame, text="Author:")
-        self.author_label.grid(row=1, column=0, padx=5, pady=5, sticky="e")
-        self.author_entry = ttk.Entry(self.frame, width=40)
-        self.author_entry.grid(row=1, column=1, padx=5, pady=5, sticky="we")
-        self.author_entry.bind('<Return>', lambda event: self.focus_next_entry(event, self.year_entry))
+        # Search bar
+        search_row = ttk.Frame(frame)
+        search_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(search_row, text="Search:").pack(side=tk.LEFT, padx=(0, 6))
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", lambda *_: self._refresh())
+        ttk.Entry(search_row, textvariable=self._search_var, width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.year_label = ttk.Label(self.frame, text="Year:")
-        self.year_label.grid(row=2, column=0, padx=5, pady=5, sticky="e")
-        self.year_entry = ttk.Entry(self.frame, width=40)
-        self.year_entry.grid(row=2, column=1, padx=5, pady=5, sticky="we")
-        self.year_entry.bind('<Return>', lambda event: self.focus_next_entry(event, self.link_entry))
+        # Treeview
+        cols = ("Title", "Author", "Year", "Tags")
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        col_widths = {"Title": 320, "Author": 180, "Year": 60, "Tags": 120}
+        for col in cols:
+            self.tree.heading(col, text=col, command=lambda c=col: self._sort(c))
+            self.tree.column(col, width=col_widths[col])
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        self.tree.bind("<Double-1>", lambda _: self.edit_reference())
+        self.tree.bind("<Return>", lambda _: self.edit_reference())
 
-        self.link_label = ttk.Label(self.frame, text="Link (optional):")
-        self.link_label.grid(row=3, column=0, padx=5, pady=5, sticky="e")
-        self.link_entry = ttk.Entry(self.frame, width=40)
-        self.link_entry.grid(row=3, column=1, padx=5, pady=5, sticky="we")
-        self.link_entry.bind('<Return>', self.add_reference)
+        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
+        vsb.grid(row=1, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=vsb.set)
 
-        self.button_frame = ttk.Frame(self.frame)
-        self.button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        # Buttons row
+        btn_row = ttk.Frame(frame)
+        btn_row.grid(row=2, column=0, columnspan=2, pady=(8, 0), sticky="w")
+        for text, cmd in [
+            ("Add",      self.add_reference),
+            ("Edit",     self.edit_reference),
+            ("Delete",   self.delete_reference),
+            ("Open URL", self.open_url),
+            ("Export",   self.export_dialog),
+            ("Import",   self.import_references),
+        ]:
+            ttk.Button(btn_row, text=text, command=cmd).pack(side=tk.LEFT, padx=4)
 
-        self.add_button = ttk.Button(self.button_frame, text="Add Reference", command=self.add_reference)
-        self.add_button.pack(side=tk.LEFT, padx=5)
+        # Status
+        self._status_var = tk.StringVar(value="0 references")
+        ttk.Label(frame, textvariable=self._status_var, foreground="#aaaaaa").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        self.export_button = ttk.Button(self.button_frame, text="Export References", command=self.export_references)
-        self.export_button.pack(side=tk.LEFT, padx=5)
+    # ── data ops ──────────────────────────────────────────────────────────────
 
-        self.import_button = ttk.Button(self.button_frame, text="Import References", command=self.import_references)
-        self.import_button.pack(side=tk.LEFT, padx=5)
+    def add_reference(self):
+        dlg = _RefDialog(self.master, title="Add Reference")
+        if dlg.result:
+            self.references.append(dlg.result)
+            self._refresh()
 
-        self.reference_listbox = tk.Listbox(self.frame, width=70, bg="#3E3E3E", fg="#FFFFFF", selectbackground="#4CAF50")
-        self.reference_listbox.grid(row=5, column=0, columnspan=2, padx=5, pady=10, sticky="nswe")
-        self.reference_listbox.bind('<Double-1>', self.edit_reference)
-
-        self.scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=self.reference_listbox.yview)
-        self.scrollbar.grid(row=5, column=2, sticky="ns")
-        self.reference_listbox.configure(yscrollcommand=self.scrollbar.set)
-
-        self.frame.columnconfigure(1, weight=1)
-        self.frame.rowconfigure(5, weight=1)
-
-    def add_reference(self, event=None):
-        title = self.title_entry.get()
-        author = self.author_entry.get()
-        year = self.year_entry.get()
-        link = self.link_entry.get()
-
-        if title and author and year:
-            ref = Reference(title, author, year, link)
-            self.references.append(ref)
-            self.update_reference_listbox()
-            self.clear_entries()
-        else:
-            messagebox.showwarning("Incomplete Data", "Please fill in all required fields.")
-
-    def update_reference_listbox(self):
-        self.reference_listbox.delete(0, tk.END)
-        for ref in self.references:
-            if ref.link:
-                self.reference_listbox.insert(tk.END, f"{ref.title} - {ref.author} ({ref.year}) - {ref.link}")
-            else:
-                self.reference_listbox.insert(tk.END, f"{ref.title} - {ref.author} ({ref.year})")
-
-    def clear_entries(self):
-        self.title_entry.delete(0, tk.END)
-        self.author_entry.delete(0, tk.END)
-        self.year_entry.delete(0, tk.END)
-        self.link_entry.delete(0, tk.END)
-
-    def export_references(self):
-        if not self.references:
-            messagebox.showinfo("No References", "There are no references to export.")
+    def edit_reference(self):
+        sel = self.tree.selection()
+        if not sel:
             return
+        idx = int(sel[0])
+        dlg = _RefDialog(self.master, title="Edit Reference", ref=self.references[idx])
+        if dlg.result:
+            self.references[idx] = dlg.result
+            self._refresh()
 
-        filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-        if filename:
-            with open(filename, "w") as f:
-                json.dump([ref.__dict__ for ref in self.references], f, indent=2)
-            messagebox.showinfo("Export Successful", f"References exported to {filename}.")
+    def delete_reference(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Select a reference to delete.")
+            return
+        idx = int(sel[0])
+        ref = self.references[idx]
+        if messagebox.askyesno("Confirm Delete", f"Delete reference:\n{ref.title}?"):
+            self.references.pop(idx)
+            self._refresh()
+
+    def open_url(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        ref = self.references[idx]
+        if ref.link:
+            webbrowser.open(ref.link)
+        else:
+            messagebox.showinfo("No Link", "This reference has no URL.")
+
+    # ── display ───────────────────────────────────────────────────────────────
+
+    def _refresh(self):
+        q = self._search_var.get().lower()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        visible = [
+            (i, r) for i, r in enumerate(self.references)
+            if q in r.title.lower() or q in r.author.lower()
+            or q in r.year or q in r.tags.lower()
+        ]
+
+        key_map = {"Title": "title", "Author": "author", "Year": "year", "Tags": "tags"}
+        col_key = key_map.get(self._sort_col, "author")
+        visible.sort(key=lambda x: getattr(x[1], col_key, "").lower(), reverse=self._sort_rev)
+
+        for i, ref in visible:
+            self.tree.insert("", "end", iid=str(i),
+                             values=(ref.title, ref.author, ref.year, ref.tags))
+
+        count = len(self.references)
+        shown = len(visible)
+        self._status_var.set(f"{shown} of {count} reference{'s' if count != 1 else ''}")
+
+    def _sort(self, col):
+        if self._sort_col == col:
+            self._sort_rev = not self._sort_rev
+        else:
+            self._sort_col = col
+            self._sort_rev = False
+        self._refresh()
+
+    # ── import / export ───────────────────────────────────────────────────────
+
+    def export_dialog(self):
+        if not self.references:
+            messagebox.showinfo("Empty", "No references to export.")
+            return
+        fmt = _PickDialog(self.master, "Export Format", ["JSON", "BibTeX", "APA Text"])
+        if fmt.result == "JSON":
+            path = filedialog.asksaveasfilename(defaultextension=".json",
+                                                filetypes=[("JSON", "*.json")])
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump([r.to_dict() for r in self.references], f, indent=2)
+                messagebox.showinfo("Exported", f"Saved {len(self.references)} references to {path}")
+        elif fmt.result == "BibTeX":
+            path = filedialog.asksaveasfilename(defaultextension=".bib",
+                                                filetypes=[("BibTeX", "*.bib")])
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n\n".join(r.bibtex() for r in self.references))
+                messagebox.showinfo("Exported", f"Exported to {path}")
+        elif fmt.result == "APA Text":
+            path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                                filetypes=[("Text", "*.txt")])
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(r.apa() for r in self.references))
+                messagebox.showinfo("Exported", f"Exported to {path}")
 
     def import_references(self):
-        filename = filedialog.askopenfilename(filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-        if filename:
-            with open(filename, "r") as f:
-                imported_refs = json.load(f)
-            for ref_dict in imported_refs:
-                self.references.append(Reference(**ref_dict))
-            self.update_reference_listbox()
-            messagebox.showinfo("Import Successful", f"References imported from {filename}.")
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("All", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            added = 0
+            for d in data:
+                self.references.append(Reference.from_dict(d))
+                added += 1
+            self._refresh()
+            messagebox.showinfo("Imported", f"Added {added} references.")
+        except Exception as e:
+            messagebox.showerror("Import Error", str(e))
 
-    def focus_next_entry(self, event, next_entry):
-        next_entry.focus_set()
 
-    def edit_reference(self, event):
-        selection = self.reference_listbox.curselection()
-        if selection:
-            index = selection[0]
-            ref = self.references[index]
-            self.title_entry.delete(0, tk.END)
-            self.title_entry.insert(0, ref.title)
-            self.author_entry.delete(0, tk.END)
-            self.author_entry.insert(0, ref.author)
-            self.year_entry.delete(0, tk.END)
-            self.year_entry.insert(0, ref.year)
-            self.link_entry.delete(0, tk.END)
-            self.link_entry.insert(0, ref.link if ref.link else "")
-            self.references.pop(index)
-            self.update_reference_listbox()
+class _PickDialog(tk.Toplevel):
+    def __init__(self, parent, title, options):
+        super().__init__(parent)
+        self.title(title)
+        self.grab_set()
+        self.configure(bg=DARK)
+        self.resizable(False, False)
+        self.result = None
+        for opt in options:
+            ttk.Button(self, text=opt, width=18,
+                       command=lambda o=opt: self._pick(o)).pack(padx=20, pady=6)
+        self.wait_window()
+
+    def _pick(self, v):
+        self.result = v
+        self.destroy()
+
 
 def main():
     root = tk.Tk()
-    app = ReferenceManagerApp(root)
+    ReferenceManagerApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,2 @@
+# colorama is optional — provides colored output on Windows
+colorama>=0.4.6

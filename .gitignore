@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# simple-pass runtime files (generated at first run)
+simple-pass/salt.bin
+simple-pass/passwords.db
+simple-pass/encryption_key.key
+
+# Rust build artifacts
+api-tester/target/
+
+# OS
+.DS_Store
+Thumbs.db

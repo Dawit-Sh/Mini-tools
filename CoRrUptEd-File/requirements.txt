@@ -1,3 +1,1 @@
-pillow==10.4.0
-python-xlib==0.33
-six==1.16.0
+# No third-party dependencies — uses stdlib only (tkinter, tarfile, hashlib, threading)
